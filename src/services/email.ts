@@ -1,6 +1,12 @@
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY || '');
+// Lazy initialization — only create Resend client when API key is present
+let _resend: Resend | null = null;
+function getResend(): Resend | null {
+  if (!process.env.RESEND_API_KEY) return null;
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
+  return _resend;
+}
 const FROM_EMAIL = 'ScriptFlare <noreply@scriptflare.app>';
 
 export interface AutopilotSummaryEmail {
@@ -13,7 +19,8 @@ export interface AutopilotSummaryEmail {
  * Send autopilot daily summary email
  */
 export async function sendAutopilotSummary(params: AutopilotSummaryEmail): Promise<void> {
-  if (!process.env.RESEND_API_KEY) {
+  const resend = getResend();
+  if (!resend) {
     console.log('[Email] RESEND_API_KEY not set, skipping email');
     return;
   }
@@ -54,7 +61,8 @@ export async function sendAutopilotSummary(params: AutopilotSummaryEmail): Promi
  * Send welcome email after signup
  */
 export async function sendWelcomeEmail(to: string, name: string): Promise<void> {
-  if (!process.env.RESEND_API_KEY) return;
+  const resend = getResend();
+  if (!resend) return;
 
   await resend.emails.send({
     from: FROM_EMAIL,
