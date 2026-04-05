@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { supabaseAdmin } from '../services/supabase';
+import { supabaseAdmin, supabaseAuthClient, db } from '../services/supabase';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -13,11 +13,11 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
-    // Create Supabase auth user
+    // Create Supabase auth user using admin (doesn't modify session state)
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // auto-confirm for now
+      email_confirm: true,
     });
 
     if (authError) {
@@ -25,27 +25,24 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Create user record in our table
-    const { data: userRecord, error: dbError } = await supabaseAdmin
-      .from('users')
-      .insert({
+    // Create user record in our users table via REST helper
+    let userRecord: any;
+    try {
+      userRecord = await db.insert('users', {
         email,
         name: name || null,
         supabase_auth_id: authData.user.id,
         tier: 'free',
-      })
-      .select()
-      .single();
-
-    if (dbError) {
+      });
+    } catch (dbErr: any) {
       // Rollback auth user
       await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-      res.status(400).json({ error: dbError.message });
+      res.status(400).json({ error: dbErr?.response?.data?.message || 'Database error' });
       return;
     }
 
-    // Sign in to get a session token
-    const { data: signInData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
+    // Sign in using the isolated auth client (does NOT affect supabaseAdmin session)
+    const { data: signInData, error: signInError } = await supabaseAuthClient.auth.signInWithPassword({
       email,
       password,
     });
@@ -79,18 +76,17 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
+    // Use isolated auth client — does NOT contaminate supabaseAdmin session
+    const { data, error } = await supabaseAuthClient.auth.signInWithPassword({ email, password });
     if (error || !data.session) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
-    // Get user record
-    const { data: userRecord } = await supabaseAdmin
-      .from('users')
-      .select('id, email, name, tier')
-      .eq('supabase_auth_id', data.user.id)
-      .single();
+    // Fetch user record via REST helper (bypasses any client state issues)
+    const userRecord = await db.selectOne<{
+      id: string; email: string; name: string | null; tier: string;
+    }>('users', { supabase_auth_id: data.user.id }, 'id,email,name,tier');
 
     res.json({
       token: data.session.access_token,
@@ -105,13 +101,11 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 // GET /auth/me
 router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { data: userRecord, error } = await supabaseAdmin
-      .from('users')
-      .select('id, email, name, tier, created_at')
-      .eq('id', req.userId)
-      .single();
+    const userRecord = await db.selectOne<{
+      id: string; email: string; name: string | null; tier: string; created_at: string;
+    }>('users', { id: req.userId }, 'id,email,name,tier,created_at');
 
-    if (error || !userRecord) {
+    if (!userRecord) {
       res.status(404).json({ error: 'User not found' });
       return;
     }

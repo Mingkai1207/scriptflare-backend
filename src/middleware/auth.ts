@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -33,29 +33,14 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       return;
     }
 
-    // Fetch user record — use raw REST call to avoid any Supabase JS client state issues
-    const SUPABASE_URL = process.env.SUPABASE_URL!;
-    const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-    const axios = require('axios');
-
-    let userRecord: { id: string; tier: string; email: string } | null = null;
-    try {
-      const resp = await axios.get(
-        `${SUPABASE_URL}/rest/v1/users?supabase_auth_id=eq.${user.id}&select=id,tier,email&limit=1`,
-        {
-          headers: {
-            apikey: SUPABASE_SERVICE_KEY,
-            Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-          },
-        },
-      );
-      userRecord = resp.data?.[0] || null;
-    } catch (axiosErr: any) {
-      console.error('[Auth] REST lookup error:', axiosErr?.message);
-    }
+    // Fetch user record via REST helper (fully stateless, always uses service role key)
+    const userRecord = await db.selectOne<{ id: string; tier: string; email: string }>(
+      'users',
+      { supabase_auth_id: user.id },
+      'id,tier,email',
+    );
 
     if (!userRecord) {
-      console.error('[Auth] User not found via REST:', user.id);
       res.status(401).json({ error: 'User record not found' });
       return;
     }
@@ -65,6 +50,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     req.userEmail = userRecord.email;
     next();
   } catch (err) {
+    console.error('[Auth] Authentication error:', err);
     res.status(401).json({ error: 'Authentication failed' });
   }
 }
