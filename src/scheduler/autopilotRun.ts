@@ -1,4 +1,4 @@
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 import { searchTrendingByNiche, getMostPopularByCategory, mergeTrendingTopics, scoreTopicsAgainstChannel } from '../services/youtube';
 import { generateScript, pickBestTopics } from '../services/scriptgen';
 import { deliverToNotion } from '../services/notion';
@@ -20,22 +20,14 @@ export async function runAutopilotForUser(userId: string): Promise<AutopilotRunR
 
   try {
     // 1. Load user config
-    const { data: config, error: configError } = await supabaseAdmin
-      .from('autopilot_configs')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    const config = await db.selectOne('autopilot_configs', { user_id: userId });
 
-    if (configError || !config) {
+    if (!config) {
       return { success: false, topicsGenerated: [], scriptsCreated: 0, deliveredTo: null, error: 'No autopilot config found' };
     }
 
     // 2. Load channel profile (if available)
-    const { data: channelProfile } = await supabaseAdmin
-      .from('channel_profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
+    const channelProfile = await db.selectOne('channel_profiles', { user_id: userId });
 
     const channelKeywords: string[] = channelProfile?.top_keywords || [];
     const avoidTopics: string[] = channelProfile?.avoid_topics || [];
@@ -81,21 +73,18 @@ export async function runAutopilotForUser(userId: string): Promise<AutopilotRunR
         });
 
         // Save to database
-        const { data: savedScript, error: saveError } = await supabaseAdmin
-          .from('generated_scripts')
-          .insert({
+        let savedScript: any;
+        try {
+          savedScript = await db.insert('generated_scripts', {
             user_id: userId,
             topic,
             niche: config.niche,
             script_content: content,
             quality_score: qualityScore,
             source: 'autopilot',
-          })
-          .select()
-          .single();
-
-        if (saveError) {
-          console.error(`[Autopilot] Failed to save script for "${topic}":`, saveError.message);
+          });
+        } catch (saveErr: any) {
+          console.error(`[Autopilot] Failed to save script for "${topic}":`, saveErr.message);
           continue;
         }
 
@@ -111,10 +100,7 @@ export async function runAutopilotForUser(userId: string): Promise<AutopilotRunR
               scriptId: savedScript.id,
             });
 
-            await supabaseAdmin
-              .from('generated_scripts')
-              .update({ delivered_to: 'notion' })
-              .eq('id', savedScript.id);
+            await db.update('generated_scripts', { delivered_to: 'notion' }, { id: savedScript.id });
 
             console.log(`[Autopilot] Delivered "${topic}" to Notion: ${notionUrl}`);
           } catch (notionErr: any) {
@@ -129,18 +115,11 @@ export async function runAutopilotForUser(userId: string): Promise<AutopilotRunR
     }
 
     // 8. Update last_run_at
-    await supabaseAdmin
-      .from('autopilot_configs')
-      .update({ last_run_at: new Date().toISOString() })
-      .eq('user_id', userId);
+    await db.update('autopilot_configs', { last_run_at: new Date().toISOString() }, { user_id: userId });
 
     // 9. Send summary email
     if (generatedScripts.length > 0) {
-      const { data: user } = await supabaseAdmin
-        .from('users')
-        .select('email')
-        .eq('id', userId)
-        .single();
+      const user = await db.selectOne('users', { id: userId }, 'email');
 
       if (user?.email) {
         await sendAutopilotSummary({

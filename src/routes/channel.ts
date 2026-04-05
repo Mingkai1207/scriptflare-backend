@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { requireAuth, requireTier, AuthRequest } from '../middleware/auth';
 import { getChannelVideos } from '../services/youtube';
 import { analyzeChannelProfile } from '../services/scriptgen';
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 
 const router = Router();
 
@@ -27,9 +27,9 @@ router.post('/analyze', requireAuth, requireTier('autopilot'), async (req: AuthR
     const profile = await analyzeChannelProfile(titles, tags);
 
     // Save to database (upsert)
-    const { data, error } = await supabaseAdmin
-      .from('channel_profiles')
-      .upsert({
+    let data: any;
+    try {
+      data = await db.upsert('channel_profiles', {
         user_id: req.userId,
         youtube_channel_url,
         channel_niche: profile.niche,
@@ -38,12 +38,9 @@ router.post('/analyze', requireAuth, requireTier('autopilot'), async (req: AuthR
         style_notes: profile.style_notes,
         avoid_topics: profile.avoid_topics,
         last_analyzed_at: new Date().toISOString(),
-      }, { onConflict: 'user_id' })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Channel profile save error:', error);
+      }, 'user_id');
+    } catch (saveErr: any) {
+      console.error('Channel profile save error:', saveErr.message);
       res.status(500).json({ error: 'Failed to save channel profile' });
       return;
     }
@@ -60,17 +57,7 @@ router.post('/analyze', requireAuth, requireTier('autopilot'), async (req: AuthR
 
 // GET /api/channel/profile
 router.get('/profile', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { data, error } = await supabaseAdmin
-    .from('channel_profiles')
-    .select('*')
-    .eq('user_id', req.userId)
-    .single();
-
-  if (error) {
-    res.json({ channel_profile: null });
-    return;
-  }
-
+  const data = await db.selectOne('channel_profiles', { user_id: req.userId });
   res.json({ channel_profile: data });
 });
 

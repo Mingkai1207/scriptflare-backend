@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 import { runAutopilotForUser } from './autopilotRun';
 
 // Map from user_id → cron task
@@ -53,17 +53,15 @@ export function unregisterUserJob(userId: string): void {
 export async function initScheduler(): Promise<void> {
   console.log('[Scheduler] Initializing...');
 
-  const { data: configs, error } = await supabaseAdmin
-    .from('autopilot_configs')
-    .select('user_id, schedule_time, schedule_days')
-    .eq('enabled', true);
-
-  if (error) {
-    console.error('[Scheduler] Failed to load configs:', error.message);
+  let configs: any[];
+  try {
+    configs = await db.select('autopilot_configs', { enabled: true }, 'user_id,schedule_time,schedule_days');
+  } catch (err: any) {
+    console.error('[Scheduler] Failed to load configs:', err.message);
     return;
   }
 
-  for (const config of configs || []) {
+  for (const config of configs) {
     registerUserJob(config);
   }
 

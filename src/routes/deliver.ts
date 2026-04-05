@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireTier, AuthRequest } from '../middleware/auth';
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 import { deliverToNotion, verifyNotionAccess } from '../services/notion';
 
 const router = Router();
@@ -16,14 +16,9 @@ router.post('/notion', requireAuth, requireTier('autopilot'), async (req: AuthRe
 
   try {
     // Get script
-    const { data: script, error: scriptError } = await supabaseAdmin
-      .from('generated_scripts')
-      .select('*')
-      .eq('id', script_id)
-      .eq('user_id', req.userId)
-      .single();
+    const script = await db.selectOne('generated_scripts', { id: script_id, user_id: req.userId });
 
-    if (scriptError || !script) {
+    if (!script) {
       res.status(404).json({ error: 'Script not found' });
       return;
     }
@@ -38,10 +33,7 @@ router.post('/notion', requireAuth, requireTier('autopilot'), async (req: AuthRe
     });
 
     // Update delivered_to
-    await supabaseAdmin
-      .from('generated_scripts')
-      .update({ delivered_to: 'notion' })
-      .eq('id', script_id);
+    await db.update('generated_scripts', { delivered_to: 'notion' }, { id: script_id });
 
     res.json({
       success: true,

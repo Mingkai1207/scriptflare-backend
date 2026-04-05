@@ -77,6 +77,36 @@ export const db = {
   },
 };
 
+/**
+ * Advanced SELECT with PostgREST ordering and limit support.
+ * options.order  — PostgREST order string, e.g. "created_at.desc"
+ * options.limit  — max rows to return
+ */
+export async function dbQuery<T = any>(
+  table: string,
+  filters: Record<string, any> = {},
+  cols = '*',
+  options: { order?: string; limit?: number } = {},
+): Promise<T[]> {
+  const parts: string[] = [`select=${encodeURIComponent(cols)}`];
+
+  for (const [k, v] of Object.entries(filters)) {
+    parts.push(`${encodeURIComponent(k)}=eq.${encodeURIComponent(String(v))}`);
+  }
+
+  if (options.order) {
+    parts.push(`order=${encodeURIComponent(options.order)}`);
+  }
+
+  if (options.limit !== undefined) {
+    parts.push(`limit=${options.limit}`);
+  }
+
+  const url = `${supabaseUrl}/rest/v1/${table}?${parts.join('&')}`;
+  const { data } = await axios.get(url, { headers: restHeaders() });
+  return data as T[];
+}
+
 // Database types
 export interface User {
   id: string;
