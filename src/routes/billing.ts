@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import axios from 'axios';
 import { requireAuth, AuthRequest } from '../middleware/auth';
-import { supabaseAdmin } from '../services/supabase';
+import { db } from '../services/supabase';
 
 const router = Router();
 
@@ -82,7 +82,19 @@ router.post('/create-subscription', requireAuth, async (req: AuthRequest, res: R
 // POST /billing/webhook — PayPal IPN/Webhook handler
 // PayPal sends events when subscription status changes
 router.post('/webhook', async (req: Request, res: Response): Promise<void> => {
-  const event = req.body;
+  // Body may arrive as raw Buffer (set by express.raw middleware) or already-parsed JSON
+  let event: any;
+  try {
+    if (Buffer.isBuffer(req.body)) {
+      event = JSON.parse(req.body.toString('utf8'));
+    } else {
+      event = req.body;
+    }
+  } catch {
+    console.error('[PayPal Webhook] Failed to parse body');
+    res.status(200).json({ received: true }); // Still 200 so PayPal doesn't retry
+    return;
+  }
   console.log('[PayPal Webhook] Event type:', event.event_type);
 
   try {
@@ -115,22 +127,14 @@ async function handleSubscriptionActivated(resource: any): Promise<void> {
   const subscriberEmail = resource.subscriber?.email_address;
   if (!subscriberEmail) return;
 
-  await supabaseAdmin
-    .from('users')
-    .update({ tier, paypal_subscription_id: subscriptionId })
-    .eq('email', subscriberEmail);
-
+  await db.update('users', { tier, paypal_subscription_id: subscriptionId }, { email: subscriberEmail });
   console.log(`[PayPal Webhook] Upgraded ${subscriberEmail} to ${tier}`);
 }
 
 async function handleSubscriptionCancelled(resource: any): Promise<void> {
   const subscriptionId = resource.id;
 
-  await supabaseAdmin
-    .from('users')
-    .update({ tier: 'free', paypal_subscription_id: null })
-    .eq('paypal_subscription_id', subscriptionId);
-
+  await db.update('users', { tier: 'free', paypal_subscription_id: null }, { paypal_subscription_id: subscriptionId });
   console.log(`[PayPal Webhook] Downgraded subscription ${subscriptionId} to free`);
 }
 
@@ -142,10 +146,7 @@ async function handleSubscriptionUpdated(resource: any): Promise<void> {
   let tier: 'pro' | 'autopilot' = 'pro';
   if (planId === PLAN_IDS.autopilot) tier = 'autopilot';
 
-  await supabaseAdmin
-    .from('users')
-    .update({ tier })
-    .eq('paypal_subscription_id', subscriptionId);
+  await db.update('users', { tier }, { paypal_subscription_id: subscriptionId });
 }
 
 // POST /billing/setup-plans — one-time setup: creates Pro and Autopilot plans in PayPal
@@ -217,12 +218,9 @@ router.post('/setup-plans', async (req: Request, res: Response): Promise<void> =
 
 // GET /billing/status — check current subscription status
 router.get('/status', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { data: user } = await supabaseAdmin
-    .from('users')
-    .select('tier, paypal_subscription_id')
-    .eq('id', req.userId)
-    .single();
-
+  const user = await db.selectOne<{ tier: string; paypal_subscription_id: string | null }>(
+    'users', { id: req.userId }, 'tier,paypal_subscription_id',
+  );
   res.json({
     tier: user?.tier || 'free',
     paypal_subscription_id: user?.paypal_subscription_id || null,
