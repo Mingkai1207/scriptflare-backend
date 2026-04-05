@@ -41,6 +41,12 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       .single();
 
     if (dbError || !userRecord) {
+      console.error('[Auth] DB lookup failed:', {
+        supabase_auth_id: user.id,
+        dbError: dbError?.message,
+        dbErrorCode: dbError?.code,
+        userRecord,
+      });
       res.status(401).json({ error: 'User record not found' });
       return;
     }
