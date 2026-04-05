@@ -121,4 +121,56 @@ router.post('/logout', async (req: Request, res: Response): Promise<void> => {
   res.json({ message: 'Logged out' });
 });
 
+// POST /auth/forgot-password — sends password reset email via Supabase
+router.post('/forgot-password', async (req: Request, res: Response): Promise<void> => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ error: 'Email is required' });
+    return;
+  }
+  try {
+    const frontendUrl = process.env.FRONTEND_URL || 'https://mingkai1207.github.io';
+    const { error } = await supabaseAuthClient.auth.resetPasswordForEmail(email, {
+      redirectTo: `${frontendUrl}/scriptflare/reset-password.html`,
+    });
+    if (error) {
+      console.error('Reset password error:', error.message);
+    }
+    // Always return success to avoid email enumeration
+    res.json({ message: 'If an account exists with that email, a reset link has been sent.' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /auth/reset-password — sets new password using Supabase recovery token
+router.post('/reset-password', async (req: Request, res: Response): Promise<void> => {
+  const { access_token, new_password } = req.body;
+  if (!access_token || !new_password || new_password.length < 8) {
+    res.status(400).json({ error: 'access_token and new_password (min 8 chars) are required' });
+    return;
+  }
+  try {
+    // Verify the recovery token to get the user ID
+    const { data: { user }, error: verifyError } = await supabaseAuthClient.auth.getUser(access_token);
+    if (verifyError || !user) {
+      res.status(401).json({ error: 'Invalid or expired reset token' });
+      return;
+    }
+    // Update password via admin API
+    const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
+      password: new_password,
+    });
+    if (updateError) {
+      res.status(400).json({ error: updateError.message });
+      return;
+    }
+    res.json({ message: 'Password updated successfully. You can now sign in.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
