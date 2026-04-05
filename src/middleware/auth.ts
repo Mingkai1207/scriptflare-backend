@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin } from '../services/supabase';
 
 export interface AuthRequest extends Request {
@@ -7,6 +7,14 @@ export interface AuthRequest extends Request {
   userTier?: 'free' | 'pro' | 'autopilot';
   userEmail?: string;
 }
+
+// Separate client for verifying user JWTs — uses anon key so it doesn't
+// contaminate the admin client's auth state used for DB queries.
+const supabaseVerifier = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!,
+  { auth: { autoRefreshToken: false, persistSession: false } },
+);
 
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
@@ -18,14 +26,14 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   const token = authHeader.substring(7);
 
   try {
-    // Verify with Supabase auth
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    // Verify token using a dedicated anon-key client (doesn't affect admin client state)
+    const { data: { user }, error } = await supabaseVerifier.auth.getUser(token);
     if (error || !user) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
     }
 
-    // Get user record from our users table
+    // Fetch user record using the admin client (service role, bypasses RLS)
     const { data: userRecord, error: dbError } = await supabaseAdmin
       .from('users')
       .select('id, tier, email')
