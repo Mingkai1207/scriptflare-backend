@@ -54,6 +54,7 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
 
     res.status(201).json({
       token: signInData.session.access_token,
+      refresh_token: signInData.session.refresh_token,
       user: {
         id: userRecord.id,
         email: userRecord.email,
@@ -90,6 +91,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 
     res.json({
       token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
       user: userRecord,
     });
   } catch (err) {
@@ -119,6 +121,29 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
 // POST /auth/logout
 router.post('/logout', async (req: Request, res: Response): Promise<void> => {
   res.json({ message: 'Logged out' });
+});
+
+// POST /auth/refresh — exchange a Supabase refresh_token for a new access_token
+router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
+  const { refresh_token } = req.body;
+  if (!refresh_token) {
+    res.status(400).json({ error: 'refresh_token is required' });
+    return;
+  }
+  try {
+    const { data, error } = await supabaseAuthClient.auth.refreshSession({ refresh_token });
+    if (error || !data.session) {
+      res.status(401).json({ error: 'Invalid or expired refresh token' });
+      return;
+    }
+    res.json({
+      token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+    });
+  } catch (err) {
+    console.error('Token refresh error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // POST /auth/forgot-password — sends password reset email via Supabase
