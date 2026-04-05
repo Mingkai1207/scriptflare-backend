@@ -69,8 +69,14 @@ router.post('/create-subscription', requireAuth, async (req: AuthRequest, res: R
       return;
     }
 
+    const subscriptionId: string = subscriptionRes.data.id;
+
+    // Store subscription_id on the user now so the webhook can match by ID
+    // (more reliable than matching by email, which may differ between accounts)
+    await db.update('users', { paypal_subscription_id: subscriptionId }, { id: req.userId });
+
     res.json({
-      subscription_id: subscriptionRes.data.id,
+      subscription_id: subscriptionId,
       approval_url: approvalLink,
     });
   } catch (err: any) {
@@ -123,12 +129,24 @@ async function handleSubscriptionActivated(resource: any): Promise<void> {
   let tier: 'pro' | 'autopilot' = 'pro';
   if (planId === PLAN_IDS.autopilot) tier = 'autopilot';
 
-  // Find user by subscription ID or email
-  const subscriberEmail = resource.subscriber?.email_address;
-  if (!subscriberEmail) return;
+  // Try to find user by subscription_id first (stored at creation), then fall back to email
+  let matched = false;
+  const existing = await db.selectOne<{ id: string }>('users', { paypal_subscription_id: subscriptionId }, 'id');
+  if (existing) {
+    await db.update('users', { tier }, { id: existing.id });
+    console.log(`[PayPal Webhook] Upgraded user ${existing.id} to ${tier} (matched by subscription_id)`);
+    matched = true;
+  }
 
-  await db.update('users', { tier, paypal_subscription_id: subscriptionId }, { email: subscriberEmail });
-  console.log(`[PayPal Webhook] Upgraded ${subscriberEmail} to ${tier}`);
+  if (!matched) {
+    const subscriberEmail = resource.subscriber?.email_address;
+    if (!subscriberEmail) {
+      console.warn('[PayPal Webhook] BILLING.SUBSCRIPTION.ACTIVATED — no subscription_id match and no email in payload');
+      return;
+    }
+    await db.update('users', { tier, paypal_subscription_id: subscriptionId }, { email: subscriberEmail });
+    console.log(`[PayPal Webhook] Upgraded ${subscriberEmail} to ${tier} (matched by email fallback)`);
+  }
 }
 
 async function handleSubscriptionCancelled(resource: any): Promise<void> {
