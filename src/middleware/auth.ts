@@ -33,26 +33,35 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       return;
     }
 
-    // Fetch user record using the admin client (service role, bypasses RLS)
-    const { data: userRecord, error: dbError } = await supabaseAdmin
-      .from('users')
-      .select('id, tier, email')
-      .eq('supabase_auth_id', user.id)
-      .single();
+    // Fetch user record — use raw REST call to avoid any Supabase JS client state issues
+    const SUPABASE_URL = process.env.SUPABASE_URL!;
+    const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const axios = require('axios');
 
-    if (dbError || !userRecord) {
-      console.error('[Auth] DB lookup failed:', {
-        supabase_auth_id: user.id,
-        dbError: dbError?.message,
-        dbErrorCode: dbError?.code,
-        userRecord,
-      });
+    let userRecord: { id: string; tier: string; email: string } | null = null;
+    try {
+      const resp = await axios.get(
+        `${SUPABASE_URL}/rest/v1/users?supabase_auth_id=eq.${user.id}&select=id,tier,email&limit=1`,
+        {
+          headers: {
+            apikey: SUPABASE_SERVICE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+          },
+        },
+      );
+      userRecord = resp.data?.[0] || null;
+    } catch (axiosErr: any) {
+      console.error('[Auth] REST lookup error:', axiosErr?.message);
+    }
+
+    if (!userRecord) {
+      console.error('[Auth] User not found via REST:', user.id);
       res.status(401).json({ error: 'User record not found' });
       return;
     }
 
     req.userId = userRecord.id;
-    req.userTier = userRecord.tier;
+    req.userTier = userRecord.tier as 'free' | 'pro' | 'autopilot';
     req.userEmail = userRecord.email;
     next();
   } catch (err) {
