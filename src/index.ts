@@ -17,6 +17,8 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors({
   origin: [
+    'https://scriptflare.org',
+    'https://www.scriptflare.org',
     'https://mingkai1207.github.io',
     'http://localhost:4200',
     'http://localhost:3000',

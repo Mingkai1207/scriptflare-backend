@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { db } from '../services/supabase';
+import { db, supabaseAdmin } from '../services/supabase';
 import { runAutopilotForUser } from './autopilotRun';
 
 // Map from user_id → cron task
@@ -66,6 +66,19 @@ export async function initScheduler(): Promise<void> {
   }
 
   console.log(`[Scheduler] Initialized ${configs?.length || 0} user jobs`);
+
+  // Supabase keep-alive: query the DB every day at 08:17 UTC so the free-tier
+  // project never goes idle and gets auto-paused.
+  cron.schedule('17 8 * * *', async () => {
+    try {
+      const { count } = await supabaseAdmin.from('users').select('*', { count: 'exact', head: true });
+      console.log(`[Scheduler] Supabase keep-alive ping OK — ${count ?? 0} users`);
+    } catch (err: any) {
+      console.error('[Scheduler] Supabase keep-alive ping failed:', err.message);
+    }
+  }, { timezone: 'UTC' });
+
+  console.log('[Scheduler] Supabase keep-alive registered (daily @ 08:17 UTC)');
 }
 
 export function getActiveJobCount(): number {
